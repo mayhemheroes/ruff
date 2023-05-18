@@ -115,13 +115,12 @@ impl<'a> Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
-    /// Return `true` if a patch should be generated under the given autofix
-    /// `Mode`.
+    /// Return `true` if a patch should be generated for a given [`Rule`].
     pub fn patch(&self, code: Rule) -> bool {
-        self.settings.rules.should_fix(code)
+        self.settings.rules.should_fix(code) && !self.ctx.in_nested_f_string()
     }
 
-    /// Return `true` if a `Rule` is disabled by a `noqa` directive.
+    /// Return `true` if a [`Rule`] is disabled by a `noqa` directive.
     pub fn rule_is_ignored(&self, code: Rule, offset: TextSize) -> bool {
         // TODO(charlie): `noqa` directives are mostly enforced in `check_lines.rs`.
         // However, in rare cases, we need to check them here. For example, when
@@ -4141,7 +4140,11 @@ where
                 }
             }
             Expr::JoinedStr(_) => {
-                self.ctx.flags |= ContextFlags::F_STRING;
+                self.ctx.flags |= if self.ctx.in_f_string() {
+                    ContextFlags::NESTED_F_STRING
+                } else {
+                    ContextFlags::F_STRING
+                };
                 visitor::walk_expr(self, expr);
             }
             _ => visitor::walk_expr(self, expr),
