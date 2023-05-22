@@ -1,0 +1,5 @@
+project: petgraph
+target: fmt
+
+cmds:
+  - cmd: /fmt
