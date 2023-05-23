@@ -60,6 +60,7 @@ jobs:
       matrix:
         mayhemfile:
           - mayhem/fmt.mayhemfile
+          - mayhem/lint.mayhemfile
 
     steps:
       - uses: actions/checkout@v3

@@ -1,0 +1,5 @@
+project: petgraph
+target: lint
+
+cmds:
+  - cmd: /lint
