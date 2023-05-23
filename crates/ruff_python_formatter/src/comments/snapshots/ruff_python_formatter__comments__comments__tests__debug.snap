@@ -1,0 +1,45 @@
+---
+source: crates/ruff_python_formatter/src/comments/comments.rs
+expression: formatted
+---
+{
+    StmtContinue(
+        StmtContinue {
+            range: 0..0,
+        },
+    ): {
+        "leading": [
+            SourceComment {
+                text: "# leading comment",
+                lines_before: 0,
+                lines_after: 0,
+                formatted: false,
+            },
+        ],
+        "dangling": [],
+        "trailing": [
+            SourceComment {
+                text: "# trailing",
+                lines_before: 0,
+                lines_after: 0,
+                formatted: false,
+            },
+        ],
+    },
+    StmtBreak(
+        StmtBreak {
+            range: 0..0,
+        },
+    ): {
+        "leading": [
+            SourceComment {
+                text: "# break leading",
+                lines_before: 0,
+                lines_after: 0,
+                formatted: false,
+            },
+        ],
+        "dangling": [],
+        "trailing": [],
+    },
+}

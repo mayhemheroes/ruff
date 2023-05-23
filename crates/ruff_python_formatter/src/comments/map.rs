@@ -207,6 +207,12 @@ impl<K: std::hash::Hash + Eq, V> CommentsMap<K, V> {
         }
     }
 
+    pub fn keys(&self) -> Keys<'_, K> {
+        Keys {
+            inner: self.index.keys(),
+        }
+    }
+
     /// Retrieves all leading parts of `key`
     pub fn leading(&self, key: &K) -> &[V] {
         match self.index.get(key) {
@@ -262,10 +268,10 @@ impl<K: std::hash::Hash + Eq, V> Default for CommentsMap<K, V> {
     }
 }
 
-impl<K, V> std::fmt::Debug for CommentsMap<K, V>
+impl<K, V> Debug for CommentsMap<K, V>
 where
-    K: std::fmt::Debug,
-    V: std::fmt::Debug,
+    K: Debug,
+    V: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut builder = f.debug_map();
@@ -633,6 +639,26 @@ impl PartIndex {
         PartIndex(NonZeroU32::new(self.0.get() + 1).unwrap())
     }
 }
+
+/// Iterator over the keys of a comments multi map
+pub struct Keys<'a, K> {
+    inner: std::collections::hash_map::Keys<'a, K, Entry>,
+}
+
+impl<'a, K> Iterator for Keys<'a, K> {
+    type Item = &'a K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<K> ExactSizeIterator for Keys<'_, K> {}
+impl<K> FusedIterator for Keys<'_, K> {}
 
 #[cfg(test)]
 mod tests {
