@@ -224,11 +224,7 @@ where
         }
 
         // Track each top-level import, to guide import insertions.
-        if matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) {
-            if self.semantic_model.at_top_level() {
-                self.importer.visit_import(stmt);
-            }
-        }
+        self.importer.enter(stmt, &self.semantic_model);
 
         // Store the flags prior to any further descent, so that we can restore them after visiting
         // the node.
@@ -2123,8 +2119,7 @@ where
             }) => {
                 self.visit_boolean_test(test);
 
-                if flake8_type_checking::helpers::is_type_checking_block(&self.semantic_model, test)
-                {
+                if analyze::typing::is_type_checking_block(&self.semantic_model, test) {
                     if self.enabled(Rule::EmptyTypeCheckingBlock) {
                         flake8_type_checking::rules::empty_type_checking_block(self, stmt, body);
                     }
@@ -2163,6 +2158,8 @@ where
             }
             _ => {}
         }
+
+        self.importer.leave(stmt, &self.semantic_model);
 
         self.semantic_model.flags = flags_snapshot;
         self.semantic_model.pop_stmt();
