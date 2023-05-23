@@ -3,11 +3,12 @@
 use anyhow::{bail, Result};
 use libcst_native::{Codegen, CodegenState, ImportAlias, Name, NameOrAttribute};
 use ruff_text_size::TextSize;
-use rustpython_parser::ast::{self, Ranged, Stmt, Suite};
+use rustpython_parser::ast::{self, Ranged, Stmt, StmtIf, Suite};
 
 use ruff_diagnostics::Edit;
 use ruff_python_ast::imports::{AnyImport, Import};
 use ruff_python_ast::source_code::{Locator, Stylist};
+use ruff_python_semantic::analyze::typing::is_type_checking_block;
 use ruff_python_semantic::model::SemanticModel;
 
 use crate::cst::matchers::{match_aliases, match_import_from, match_statement};
@@ -15,11 +16,30 @@ use crate::importer::insertion::Insertion;
 
 mod insertion;
 
+#[allow(dead_code)]
+struct TypeCheckingBlock<'a> {
+    /// The [`StmtIf`] that represents the `if TYPE_CHECKING:` block.
+    stmt: &'a StmtIf,
+    /// The list of imports in the `if TYPE_CHECKING:` block.
+    imports: Vec<&'a Stmt>,
+}
+
 pub(crate) struct Importer<'a> {
+    /// The Python AST to which we are adding imports.
     python_ast: &'a Suite,
+    /// The [`Locator`] for the Python AST.
     locator: &'a Locator<'a>,
+    /// The [`Stylist`] for the Python AST.
     stylist: &'a Stylist<'a>,
-    ordered_imports: Vec<&'a Stmt>,
+    /// The list of visited, top-level runtime imports in the Python AST.
+    runtime_imports: Vec<&'a Stmt>,
+    /// The list of visited, top-level `if TYPE_BLOCKING:` blocks in the Python AST.
+    typing_imports: Vec<TypeCheckingBlock<'a>>,
+    /// The current stack of `if TYPE_BLOCKING:` blocks in the Python AST that are being visited,
+    /// to support nested `if TYPE_BLOCKING:` blocks at the top level.
+    blocks: Vec<TypeCheckingBlock<'a>>,
+    /// The current depth of the visitor.
+    depth: u32,
 }
 
 impl<'a> Importer<'a> {
@@ -32,13 +52,54 @@ impl<'a> Importer<'a> {
             python_ast,
             locator,
             stylist,
-            ordered_imports: Vec::default(),
+            runtime_imports: Vec::default(),
+            typing_imports: Vec::default(),
+            blocks: Vec::default(),
+            depth: 0,
         }
     }
 
-    /// Visit a top-level import statement.
-    pub(crate) fn visit_import(&mut self, import: &'a Stmt) {
-        self.ordered_imports.push(import);
+    /// Enter a [`Stmt`].
+    pub(crate) fn enter(&mut self, stmt: &'a Stmt, semantic_model: &SemanticModel) {
+        match stmt {
+            // Add import.
+            Stmt::Import(_) | Stmt::ImportFrom(_) if self.depth == 0 => {
+                if let Some(block) = self.blocks.last_mut() {
+                    block.imports.push(stmt);
+                } else {
+                    self.runtime_imports.push(stmt);
+                }
+            }
+            // Push `if TYPE_CHECKING:` block.
+            Stmt::If(stmt)
+                if self.depth == 0 && is_type_checking_block(semantic_model, &stmt.test) =>
+            {
+                self.blocks.push(TypeCheckingBlock {
+                    stmt,
+                    imports: Vec::default(),
+                });
+            }
+            // Increment depth.
+            _ => self.depth += 1,
+        }
+    }
+
+    /// Leave a [`Stmt`]. It's assumed that the given [`Stmt`] was previously entered.
+    pub(crate) fn leave(&mut self, stmt: &'a Stmt, semantic_model: &SemanticModel) {
+        match stmt {
+            // Nothing to do.
+            Stmt::Import(_) | Stmt::ImportFrom(_) if self.depth == 0 => {}
+            // Pop `if TYPE_CHECKING:` block.
+            Stmt::If(stmt)
+                if self.depth == 0 && is_type_checking_block(semantic_model, &stmt.test) =>
+            {
+                if let Some(block) = self.blocks.pop() {
+                    self.typing_imports.push(block);
+                }
+            }
+            // Decrement depth.
+            _ => self.depth -= 1,
+        }
     }
 
     /// Add an import statement to import the given module.
@@ -176,17 +237,17 @@ impl<'a> Importer<'a> {
 
     /// Return the import statement that precedes the given position, if any.
     fn preceding_import(&self, at: TextSize) -> Option<&Stmt> {
-        self.ordered_imports
+        self.runtime_imports
             .partition_point(|stmt| stmt.start() < at)
             .checked_sub(1)
-            .map(|idx| self.ordered_imports[idx])
+            .map(|idx| self.runtime_imports[idx])
     }
 
     /// Return the top-level [`Stmt`] that imports the given module using `Stmt::ImportFrom`
     /// preceding the given position, if any.
     fn find_import_from(&self, module: &str, at: TextSize) -> Option<&Stmt> {
         let mut import_from = None;
-        for stmt in &self.ordered_imports {
+        for stmt in &self.runtime_imports {
             if stmt.start() >= at {
                 break;
             }
