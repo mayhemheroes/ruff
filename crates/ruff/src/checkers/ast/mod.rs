@@ -5136,16 +5136,13 @@ impl<'a> Checker<'a> {
                     }
                     if let Some(diagnostic) =
                         flake8_type_checking::rules::typing_only_runtime_import(
+                            self,
                             binding,
                             &runtime_imports,
-                            &self.semantic_model,
                             self.package,
-                            self.settings,
                         )
                     {
-                        if self.enabled(diagnostic.kind.rule()) {
-                            diagnostics.push(diagnostic);
-                        }
+                        diagnostics.push(diagnostic);
                     }
                 }
             }

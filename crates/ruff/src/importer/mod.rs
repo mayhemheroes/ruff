@@ -109,7 +109,7 @@ impl<'a> Importer<'a> {
     /// import statement.
     pub(crate) fn add_import(&self, import: &AnyImport, at: TextSize) -> Edit {
         let required_import = import.to_string();
-        if let Some(stmt) = self.preceding_import(at) {
+        if let Some(stmt) = self.preceding_import(&self.runtime_imports, at) {
             // Insert after the last top-level import.
             Insertion::end_of_statement(stmt, self.locator, self.stylist)
                 .into_edit(&required_import)
@@ -118,6 +118,54 @@ impl<'a> Importer<'a> {
             Insertion::top_of_file(self.python_ast, self.locator, self.stylist)
                 .into_edit(&required_import)
         }
+    }
+
+    pub(crate) fn add_typing_import(
+        &self,
+        // TODO(charlie): This won't preserve comments or anything like that. It'll also lose
+        // information like explicit re-exports.
+        import: &AnyImport,
+        at: TextSize,
+        semantic_model: &SemanticModel,
+    ) -> Result<(Edit, Edit)> {
+        // Grab the `TYPE_CHECKING` symbol from `typing`.
+        // TODO(charlie): This isn't quite right, we could end up importing the symbol too late.
+        let (type_checking_edit, type_checking) =
+            self.get_or_import_symbol("typing", "TYPE_CHECKING", at, semantic_model)?;
+
+        // Add the import.
+        let required_import = import.to_string();
+        let add_import_edit = if let Some(block) = self.preceding_block(at) {
+            // Insert at the top of the block.
+            // TODO(charlie): We should probably do this with LibCST.
+            Insertion::top_of_block(&block.stmt.body, self.locator, self.stylist)
+                .into_edit(&required_import)
+        } else {
+            // Insert a new block after the last top-level import.
+            // TODO(charlie): I think we should do this with LibCST...
+            let block = format!(
+                "if {}:{}{}{}",
+                type_checking,
+                self.stylist.line_ending().as_str(),
+                self.stylist.indentation().as_str(),
+                required_import
+            );
+
+            // In this case, these both need to be at the start of a new line.
+            if let Some(stmt) = self.preceding_import(&self.runtime_imports, at) {
+                // Insert after the last import in the block.
+                // TODO(charlie): This will break if the statement is a multi-line statement
+                // (semicolon-delimited).
+                Insertion::end_of_statement(stmt, self.locator, self.stylist).into_edit(&block)
+            } else {
+                // Insert at the top of the block.
+                // TODO(charlie): This is probably wrong too.
+                Insertion::top_of_file(&self.python_ast, self.locator, self.stylist)
+                    .into_edit(&block)
+            }
+        };
+
+        Ok((type_checking_edit, add_import_edit))
     }
 
     /// Generate an [`Edit`] to reference the given symbol. Returns the [`Edit`] necessary to make
@@ -226,14 +274,6 @@ impl<'a> Importer<'a> {
         }
     }
 
-    /// Return the import statement that precedes the given position, if any.
-    fn preceding_import(&self, at: TextSize) -> Option<&Stmt> {
-        self.runtime_imports
-            .partition_point(|stmt| stmt.start() < at)
-            .checked_sub(1)
-            .map(|idx| self.runtime_imports[idx])
-    }
-
     /// Return the top-level [`Stmt`] that imports the given module using `Stmt::ImportFrom`
     /// preceding the given position, if any.
     fn find_import_from(&self, module: &str, at: TextSize) -> Option<&Stmt> {
@@ -279,5 +319,21 @@ impl<'a> Importer<'a> {
         };
         statement.codegen(&mut state);
         Ok(Edit::range_replacement(state.to_string(), stmt.range()))
+    }
+
+    /// Return the import statement that precedes the given position, if any.
+    fn preceding_import(&self, imports: &[&'a Stmt], at: TextSize) -> Option<&'a Stmt> {
+        imports
+            .partition_point(|stmt| stmt.start() < at)
+            .checked_sub(1)
+            .map(|idx| imports[idx])
+    }
+
+    /// Return the import statement that precedes the given position, if any.
+    fn preceding_block(&self, at: TextSize) -> Option<&TypeCheckingBlock> {
+        self.blocks
+            .partition_point(|block| block.stmt.start() < at)
+            .checked_sub(1)
+            .map(|idx| &self.blocks[idx])
     }
 }

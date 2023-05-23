@@ -98,6 +98,25 @@ impl Insertion {
         Insertion::new("", location, stylist.line_ending().as_str())
     }
 
+    /// Create an [`Insertion`] to insert (e.g.) an import statement at the "top" of a given block,
+    /// along with a prefix and suffix to use for the insertion.
+    ///
+    /// For example, given the following code:
+    ///
+    /// ```python
+    /// if TYPE_CHECKING:
+    ///     """Hello, world!"""
+    ///
+    ///     import os
+    /// ```
+    ///
+    /// The insertion returned will begin at the start of the `import os` statement, and will
+    /// include a trailing newline suffix.
+    pub(super) fn top_of_block(body: &[Stmt], locator: &Locator, stylist: &Stylist) -> Insertion {
+        let location = body[0].start();
+        Insertion::new("", location, stylist.line_ending().as_str())
+    }
+
     fn new(prefix: &'static str, location: TextSize, suffix: &'static str) -> Self {
         Self {
             prefix,

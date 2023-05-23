@@ -1,14 +1,18 @@
 use std::path::Path;
 
-use ruff_diagnostics::{Diagnostic, Violation};
+use rustpython_parser::ast::Stmt;
+
+use ruff_diagnostics::{Diagnostic, Fix, Violation};
 use ruff_macros::{derive_message_formats, violation};
+use ruff_python_ast::imports::{Alias, AnyImport, Import};
 use ruff_python_semantic::binding::{
     Binding, BindingKind, FromImportation, Importation, SubmoduleImportation,
 };
-use ruff_python_semantic::model::SemanticModel;
 
+use crate::autofix;
+use crate::checkers::ast::Checker;
+use crate::registry::AsRule;
 use crate::rules::isort::{categorize, ImportSection, ImportType};
-use crate::settings::Settings;
 
 /// ## What it does
 /// Checks for first-party imports that are only used for type annotations, but
@@ -242,15 +246,14 @@ fn is_exempt(name: &str, exempt_modules: &[&str]) -> bool {
 
 /// TCH001
 pub(crate) fn typing_only_runtime_import(
+    checker: &Checker,
     binding: &Binding,
     runtime_imports: &[&Binding],
-    semantic_model: &SemanticModel,
     package: Option<&Path>,
-    settings: &Settings,
 ) -> Option<Diagnostic> {
     // If we're in un-strict mode, don't flag typing-only imports that are
     // implicitly loaded by way of a valid runtime import.
-    if !settings.flake8_type_checking.strict
+    if !checker.settings.flake8_type_checking.strict
         && runtime_imports
             .iter()
             .any(|import| is_implicit_import(binding, import))
@@ -267,7 +270,8 @@ pub(crate) fn typing_only_runtime_import(
 
     if is_exempt(
         full_name,
-        &settings
+        &checker
+            .settings
             .flake8_type_checking
             .exempt_modules
             .iter()
@@ -277,12 +281,16 @@ pub(crate) fn typing_only_runtime_import(
         return None;
     }
 
+    let Some(reference_id) = binding.references.first() else {
+        return None;
+    };
+
     if binding.context.is_runtime()
-        && binding.is_used()
-        && binding.references().all(|reference_id| {
-            semantic_model
+        && binding.references.iter().all(|reference_id| {
+            checker
+                .semantic_model()
                 .references
-                .resolve(reference_id)
+                .resolve(*reference_id)
                 .context()
                 .is_typing()
         })
@@ -298,41 +306,135 @@ pub(crate) fn typing_only_runtime_import(
             .unwrap();
 
         // Categorize the import.
-        match categorize(
+        let mut diagnostic = match categorize(
             full_name,
             Some(level),
-            &settings.src,
+            &checker.settings.src,
             package,
-            &settings.isort.known_modules,
-            settings.target_version,
+            &checker.settings.isort.known_modules,
+            checker.settings.target_version,
         ) {
             ImportSection::Known(ImportType::LocalFolder | ImportType::FirstParty) => {
-                Some(Diagnostic::new(
+                Diagnostic::new(
                     TypingOnlyFirstPartyImport {
                         full_name: full_name.to_string(),
                     },
                     binding.range,
-                ))
+                )
             }
             ImportSection::Known(ImportType::ThirdParty) | ImportSection::UserDefined(_) => {
-                Some(Diagnostic::new(
+                Diagnostic::new(
                     TypingOnlyThirdPartyImport {
                         full_name: full_name.to_string(),
                     },
                     binding.range,
-                ))
+                )
             }
-            ImportSection::Known(ImportType::StandardLibrary) => Some(Diagnostic::new(
+            ImportSection::Known(ImportType::StandardLibrary) => Diagnostic::new(
                 TypingOnlyStandardLibraryImport {
                     full_name: full_name.to_string(),
                 },
                 binding.range,
-            )),
+            ),
             ImportSection::Known(ImportType::Future) => {
                 unreachable!("`__future__` imports should be marked as used")
             }
+        };
+
+        if checker.settings.rules.enabled(diagnostic.kind.rule()) {
+            if checker.patch(diagnostic.kind.rule()) {
+                // What does it take to autofix this?
+                // First, we need to remove the import.
+                // Second, we need to add a type-checking block.
+                // Third, we need to add the import within the type-checking block.
+
+                diagnostic.try_set_fix(|| {
+                    // Step 1) Remove the import.
+                    let source = binding.source.unwrap();
+                    let deleted: Vec<&Stmt> = checker.deletions.iter().map(Into::into).collect();
+                    let stmt = checker.semantic_model().stmts[source];
+                    let parent = checker
+                        .semantic_model()
+                        .stmts
+                        .parent_id(source)
+                        .map(|id| checker.semantic_model().stmts[id]);
+                    let remove_import_edit = autofix::actions::remove_unused_imports(
+                        std::iter::once(full_name),
+                        stmt,
+                        parent,
+                        &deleted,
+                        checker.locator,
+                        checker.indexer,
+                        checker.stylist,
+                    )?;
+
+                    // I think we should format the import here, by taking `stmt`, and removing
+                    // every member that isn't `full_name`, then generating that string.
+
+                    // Step 2) Add the import within the type-checking block.
+                    let reference = checker.semantic_model().references.resolve(*reference_id);
+                    let (add_type_checking_edit, add_import_edit) =
+                        checker.importer.add_typing_import(
+                            // Create the `AnyImport`.
+                            &any_import(binding).unwrap(),
+                            reference.range().start(),
+                            checker.semantic_model(),
+                        )?;
+
+                    // TODO(charlie): Sort these. They can be in ~any order.
+                    Ok(Fix::suggested_edits(
+                        remove_import_edit,
+                        [add_type_checking_edit, add_import_edit],
+                    ))
+                });
+            }
+
+            Some(diagnostic)
+        } else {
+            None
         }
     } else {
         None
+    }
+}
+
+/// Convert a [`Binding`] into an [`AnyImport`].
+fn any_import<'a>(binding: &Binding<'a>) -> Option<AnyImport<'a>> {
+    match &binding.kind {
+        BindingKind::Importation(import) => {
+            // TODO(charlie): This is incorrect for explicit re-exports.
+            if import.name == import.full_name {
+                Some(AnyImport::Import(Import {
+                    name: Alias {
+                        name: import.full_name,
+                        as_name: None,
+                    },
+                }))
+            } else {
+                Some(AnyImport::Import(Import {
+                    name: Alias {
+                        name: import.full_name,
+                        as_name: Some(import.name),
+                    },
+                }))
+            }
+        }
+        BindingKind::FromImportation(import) => {
+            todo!()
+            // let level = import.full_name.chars().take_while(|c| *c == '.').count();
+            // let module = &import.full_name[level..];
+            // Some(AnyImport::ImportFrom(ImportFrom {
+            //     module: None,
+            //     name: Alias { name: "", as_name: None },
+            //     level: Some(level as u32),
+            // }))
+        }
+        BindingKind::SubmoduleImportation(import) => Some(AnyImport::Import(Import {
+            name: Alias {
+                name: import.full_name,
+                as_name: None,
+            },
+        })),
+        _ => return None,
     }
 }
