@@ -75,14 +75,16 @@
 //! This hasn't shown to be a significant limitation today but the infrastructure could be extended to support a `label` on [`SourceComment`] that allows to further categorise comments.
 //!
 
-use ruff_text_size::TextRange;
 use std::cell::Cell;
 use std::fmt::{Debug, Formatter};
 
+mod builder;
 mod comments;
 mod map;
 mod node_key;
+mod placement;
 
+pub(crate) use builder::CommentsVisitor;
 pub(crate) use comments::Comments;
 use ruff_formatter::{SourceCode, SourceCodeSlice};
 

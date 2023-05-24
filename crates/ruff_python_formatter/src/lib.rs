@@ -19,6 +19,7 @@ mod format;
 mod newlines;
 mod parentheses;
 mod prelude;
+mod transform;
 mod trivia;
 
 include!("../../ruff_formatter/shared_traits.rs");

@@ -36,6 +36,12 @@ const fn key(node: AnyNodeRef) -> NodeRefEqualityKey {
 }
 
 impl<'a> Comments<'a> {
+    pub(super) fn new(comments: CommentsMap<'a>) -> Self {
+        Self {
+            data: Rc::new(CommentsData { comments }),
+        }
+    }
+
     #[inline]
     pub(crate) fn has_comments(&self, node: AnyNodeRef) -> bool {
         self.data.comments.has(&key(node))
@@ -217,11 +223,9 @@ mod tests {
     use crate::comments::map::CommentsMap;
     use crate::comments::node_key::NodeRefEqualityKey;
     use crate::comments::SourceComment;
-    use insta::_macro_support::assert_snapshot;
     use insta::assert_snapshot;
     use ruff_formatter::SourceCode;
     use ruff_python_ast::node::AnyNode;
-    use ruff_python_ast::source_code;
     use ruff_text_size::{TextRange, TextSize};
     use rustpython_parser::ast::{StmtBreak, StmtContinue};
     use std::cell::Cell;
