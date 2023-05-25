@@ -1,0 +1,5 @@
+project: ruff
+target: lint
+
+cmds:
+  - cmd: /lint
