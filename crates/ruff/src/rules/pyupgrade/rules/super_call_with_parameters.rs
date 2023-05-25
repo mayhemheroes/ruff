@@ -46,7 +46,10 @@ pub(crate) fn super_call_with_parameters(
     let scope = checker.semantic_model().scope();
 
     // Check: are we in a Function scope?
-    if !matches!(scope.kind, ScopeKind::Function(_)) {
+    if !matches!(
+        scope.kind,
+        ScopeKind::Function(_) | ScopeKind::AsyncFunction(_)
+    ) {
         return;
     }
 
